@@ -1,0 +1,55 @@
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: defi-timescaledb
+    environment:
+      POSTGRES_DB: defi_timeseries
+      POSTGRES_USER: ${DB_USER:-defi}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-defi}
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescale-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-defi} -d defi_timeseries"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    container_name: defi-monitoring
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    environment:
+      # Datasource aponta para o serviço do compose (não localhost)
+      SPRING_DATASOURCE_URL: jdbc:postgresql://timescaledb:5432/defi_timeseries
+      DB_USER: ${DB_USER:-defi}
+      DB_PASSWORD: ${DB_PASSWORD:-defi}
+      # Chave do nó RPC Solana (Alchemy). O calendário macro (faireconomy) é público.
+      ALCHEMY_API_KEY: ${ALCHEMY_API_KEY:-demo}
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    container_name: defi-frontend
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    environment:
+      # Conecta ao mesmo TimescaleDB do pipeline
+      DB_HOST: timescaledb
+      DB_PORT: "5432"
+      DB_NAME: defi_timeseries
+      DB_USER: ${DB_USER:-defi}
+      DB_PASSWORD: ${DB_PASSWORD:-defi}
+      PORT: "3000"
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+volumes:
+  timescale-data:

@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DeFi Monitor — Dashboard de Análise</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>DeFi Monitor <span class="sub">Uniswap V3 · TimescaleDB</span></h1>
+    <div class="controls">
+      <label>Pool
+        <select id="poolSelect"></select>
+      </label>
+      <label>Timeframe
+        <select id="tfSelect">
+          <option value="1m">1m</option>
+          <option value="5m" selected>5m</option>
+          <option value="1h">1h</option>
+        </select>
+      </label>
+      <label>Candles
+        <select id="limitSelect">
+          <option>200</option>
+          <option selected>500</option>
+          <option>1000</option>
+          <option>2000</option>
+        </select>
+      </label>
+      <button id="refreshBtn">Atualizar</button>
+      <span id="status" class="status"></span>
+    </div>
+  </header>
+
+  <main>
+    <!-- Resumo do estado atual -->
+    <section class="cards" id="summaryCards"></section>
+
+    <!-- OHLCV + Bollinger -->
+    <section class="panel">
+      <h2>Preço · Bandas de Bollinger · PoC <span class="hint">squeeze destacado em ●</span></h2>
+      <div class="chart-wrap"><canvas id="priceChart"></canvas></div>
+    </section>
+
+    <div class="grid-2">
+      <section class="panel">
+        <h2>ATR (14) · Volatilidade</h2>
+        <div class="chart-wrap small"><canvas id="atrChart"></canvas></div>
+      </section>
+      <section class="panel">
+        <h2>Bollinger Bandwidth · Squeeze</h2>
+        <div class="chart-wrap small"><canvas id="bwChart"></canvas></div>
+      </section>
+    </div>
+
+    <div class="grid-2">
+      <section class="panel">
+        <h2>Volume (token1) por candle</h2>
+        <div class="chart-wrap small"><canvas id="volChart"></canvas></div>
+      </section>
+      <section class="panel">
+        <h2>Rácio Volume/TVL · eficiência de fees</h2>
+        <div class="chart-wrap small"><canvas id="ratioChart"></canvas></div>
+      </section>
+    </div>
+
+    <!-- Scanner de squeeze / lateralização -->
+    <section class="panel">
+      <h2>Scanner de Squeeze &amp; Regime de Mercado</h2>
+      <table id="scannerTable">
+        <thead>
+          <tr>
+            <th>Pool</th><th>TF</th><th>Estado</th><th>Squeeze</th>
+            <th>Bandwidth</th><th>ATR</th><th>Vol/TVL</th>
+            <th>PoC</th><th>Macro 24h</th><th>Atualizado</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <!-- Fundamentos -->
+    <section class="panel">
+      <h2>Fundamentos por Pool (The Graph)</h2>
+      <table id="fundTable">
+        <thead>
+          <tr><th>Pool</th><th>TVL (USD)</th><th>Volume 24h</th><th>Fees 24h</th><th>Vol/TVL</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
