@@ -4,6 +4,7 @@ import com.defi.monitor.config.DefiProperties;
 import com.defi.monitor.dto.PoolFundamentals;
 import com.defi.monitor.dto.PriceTick;
 import com.defi.monitor.indicators.MarketClassifier;
+import com.defi.monitor.persistence.MetricHistory;
 import com.defi.monitor.persistence.MetricSink;
 import com.defi.monitor.processing.EnrichmentCache;
 import com.defi.monitor.processing.PoolMonitorWorker;
@@ -88,6 +89,7 @@ public class OrcaWhirlpoolService {
     private final JdbcTemplate jdbc;
     private final ExecutorService virtualThreads;
     private final EnrichmentCache cache;
+    private final MetricHistory history;
 
     private final List<PoolRuntime> pools = new ArrayList<>();
     private final Map<String, PoolMonitorWorker> workers = new ConcurrentHashMap<>();
@@ -107,6 +109,7 @@ public class OrcaWhirlpoolService {
                                 JdbcTemplate jdbc,
                                 MarketClassifier classifier,
                                 MetricSink sink,
+                                MetricHistory history,
                                 EnrichmentCache cache,
                                 ExecutorService virtualThreadExecutor) {
         this.cfg = props.solana();
@@ -115,6 +118,7 @@ public class OrcaWhirlpoolService {
         this.jdbc = jdbc;
         this.virtualThreads = virtualThreadExecutor;
         this.cache = cache;
+        this.history = history;
         this.usdcMint = cfg.usdcMint();
         cfg.pools().forEach(p -> {
             pools.add(new PoolRuntime(p.symbol(), p.whirlpool()));
@@ -125,6 +129,16 @@ public class OrcaWhirlpoolService {
 
     @PostConstruct
     public void start() {
+        // Aquece os indicadores com o histórico já persistido, ANTES de ligar a
+        // ingestão — assim ATR/Bollinger não ficam NULL após um restart.
+        workers.forEach((addr, w) -> {
+            try {
+                w.warmUp(history);
+            } catch (Exception e) {
+                log.warn("Falha no warm-up da pool {}: {}", addr, e.getMessage());
+            }
+        });
+
         virtualThreads.submit(() -> {
             discoverAll();
             if (cfg.useWebsocket()) connectWithRetry();

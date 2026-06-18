@@ -1,0 +1,5 @@
+com/defi/monitor/indicators/IndicatorEngineTest.class
+com/defi/monitor/macro/MacroCalendarServiceTest.class
+com/defi/monitor/solana/WhirlpoolDecoderTest.class
+com/defi/monitor/indicators/CandleAggregatorTest.class
+com/defi/monitor/indicators/MarketClassifierTest.class

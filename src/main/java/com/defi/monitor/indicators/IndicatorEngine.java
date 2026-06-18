@@ -41,6 +41,15 @@ public final class IndicatorEngine {
         while (window.size() > maxWindow) window.removeFirst();
     }
 
+    /**
+     * Número de candles a pré-carregar do histórico para aquecer TODOS os
+     * indicadores (ATR, Bollinger e Volume Profile 24h) de uma vez. É o próprio
+     * tamanho máximo da janela deslizante.
+     */
+    public int warmupSize() {
+        return maxWindow;
+    }
+
     // ---------------- ATR ----------------
 
     /** True Range do candle mais recente contra o close anterior. */

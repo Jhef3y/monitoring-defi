@@ -1,0 +1,70 @@
+spring:
+  application:
+    name: monitoring-defi
+
+  # Virtual Threads (Project Loom) ativados nativamente no Spring Boot 3.2+.
+  # Toda request, @Async e o executor padrão passam a rodar sobre virtual threads.
+  threads:
+    virtual:
+      enabled: true
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/defi_timeseries
+    username: ${DB_USER:defi}
+    password: ${DB_PASSWORD:defi}
+    hikari:
+      maximum-pool-size: 20
+      pool-name: timescale-pool
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
+defi:
+  solana:
+    # Endpoints do nó RPC Solana (Alchemy). O mesmo ALCHEMY_API_KEY é usado.
+    rpc-url: https://solana-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY:demo}
+    ws-url: wss://solana-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY:demo}
+    # Program id da Orca Whirlpools e mint da USDC (para orientar o preço em USD)
+    whirlpool-program-id: whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc
+    usdc-mint: EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
+    reconnect-delay-ms: 5000
+    stats-cron: "0 0 * * * *"   # snapshot de TVL/fundamentos a cada hora cheia
+    # Modo de ingestão: false = polling HTTP (getMultipleAccounts) — confiável e padrão;
+    # true = WebSocket accountSubscribe (menor latência, mas depende do suporte/limites do provedor).
+    use-websocket: false
+    poll-interval-ms: 3000      # frequência do polling do preço/reservas on-chain
+    # Pools de liquidez concentrada da Orca (conta da Whirlpool).
+    # Decimais e ordenação dos tokens são descobertos on-chain no startup.
+    pools:
+      - symbol: SOL/USDC
+        whirlpool: Czfq3xZZDmsdGdUyrNLtRhGc47cXcZtLG4crryfu44zE
+      - symbol: cbBTC/USDC
+        whirlpool: HxA6SKW5qA4o12fjVgTpXdq2YnZ5Zv1s7SB4FFomsyLM
+      - symbol: SPYx/USDC
+        whirlpool: Fae5dWVntUt6zbWu2voXxioDpMii7SqQwtsxBmoVCsHR
+
+  macro:
+    # Calendário econômico real (faireconomy / Forex Factory) — JSON gratuito, sem API key.
+    # Defina mock-enabled: true para usar o mock estruturado (ex.: ambientes offline/testes).
+    mock-enabled: false
+    calendar-this-week-url: https://nfs.faireconomy.media/ff_calendar_thisweek.json
+    # Feed da próxima semana é opcional; deixe vazio se o endpoint retornar 404.
+    calendar-next-week-url: ""
+    # Moedas de interesse para a flag de alto impacto. Vazio ([]) = todas as moedas.
+    currencies:
+      - USD
+    poll-cron: "0 5 * * * *"   # 5 min depois da hora cheia
+
+  indicators:
+    atr-period: 14
+    bollinger-period: 20
+    bollinger-std-dev: 2.0
+    # Limiar do bandwidth abaixo do qual consideramos 'squeeze' (compressão)
+    squeeze-bandwidth-threshold: 0.04
+    volume-profile-bins: 50
+
+logging:
+  level:
+    com.defi.monitor: INFO

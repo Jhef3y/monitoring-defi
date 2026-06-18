@@ -1,6 +1,7 @@
 package com.defi.monitor.persistence;
 
 import com.defi.monitor.dto.PoolMetric;
+import com.defi.monitor.indicators.Candle;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -10,6 +11,7 @@ import org.springframework.stereotype.Repository;
 import java.sql.Timestamp;
 import java.sql.Types;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -21,9 +23,18 @@ import java.util.concurrent.LinkedBlockingQueue;
  * no TimescaleDB — candles fechados chegam continuamente do caminho de tempo real.
  */
 @Repository
-public class MetricRepository implements MetricSink {
+public class MetricRepository implements MetricSink, MetricHistory {
 
     private static final Logger log = LoggerFactory.getLogger(MetricRepository.class);
+
+    /** Últimos N candles de uma pool/timeframe (ordem decrescente; revertida ao retornar). */
+    private static final String RECENT_CANDLES = """
+        SELECT bucket_time, open, high, low, close, volume_token0, volume_token1, swap_count
+        FROM pool_metrics
+        WHERE pool_address = ? AND timeframe = ?
+        ORDER BY bucket_time DESC
+        LIMIT ?
+        """;
 
     private static final String UPSERT = """
         INSERT INTO pool_metrics (
@@ -52,6 +63,17 @@ public class MetricRepository implements MetricSink {
 
     public MetricRepository(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
+    }
+
+    @Override
+    public List<Candle> recentClosedCandles(String poolAddress, String timeframe, int limit) {
+        List<Candle> rows = jdbc.query(RECENT_CANDLES, (rs, n) -> new Candle(
+                rs.getTimestamp("bucket_time").toInstant(),
+                rs.getDouble("open"), rs.getDouble("high"), rs.getDouble("low"), rs.getDouble("close"),
+                rs.getDouble("volume_token0"), rs.getDouble("volume_token1"), rs.getInt("swap_count")),
+                poolAddress, timeframe, limit);
+        Collections.reverse(rows);   // crescente (cronológico) para alimentar a janela na ordem certa
+        return rows;
     }
 
     @Override

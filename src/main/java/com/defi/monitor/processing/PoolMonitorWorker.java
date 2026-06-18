@@ -8,11 +8,13 @@ import com.defi.monitor.indicators.Candle;
 import com.defi.monitor.indicators.CandleAggregator;
 import com.defi.monitor.indicators.IndicatorEngine;
 import com.defi.monitor.indicators.MarketClassifier;
+import com.defi.monitor.persistence.MetricHistory;
 import com.defi.monitor.persistence.MetricSink;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -52,6 +54,24 @@ public final class PoolMonitorWorker {
         TIMEFRAMES.forEach((tf, secs) -> {
             aggregators.put(tf, new CandleAggregator(secs));
             engines.put(tf, new IndicatorEngine(indicators, secs));
+        });
+    }
+
+    /**
+     * Aquece os indicadores no startup: carrega do banco os últimos candles
+     * fechados de cada timeframe e alimenta a janela do {@link IndicatorEngine}
+     * (sem repersistir). Assim ATR/Bollinger/Volume Profile já vêm preenchidos
+     * no primeiro candle novo, em vez de esperar o reaquecimento (até ~20h no 1h).
+     */
+    public void warmUp(MetricHistory history) {
+        TIMEFRAMES.keySet().forEach(tf -> {
+            IndicatorEngine engine = engines.get(tf);
+            List<Candle> hist = history.recentClosedCandles(poolAddress, tf, engine.warmupSize());
+            hist.forEach(engine::addClosedCandle);
+            if (!hist.isEmpty()) {
+                log.info("Warm-up [{}|{}]: {} candles carregados do histórico",
+                        poolAddress, tf, hist.size());
+            }
         });
     }
 
