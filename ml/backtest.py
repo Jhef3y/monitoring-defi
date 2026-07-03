@@ -96,14 +96,22 @@ def simulate(fut_low: np.ndarray, fut_high: np.ndarray, tir: np.ndarray,
              label_fixed: np.ndarray, p: np.ndarray, lo_pred: np.ndarray,
              hi_pred: np.ndarray, threshold: float, horizon: int,
              capital: float, fee_apr: float, gas: float,
-             candle_minutes: int) -> dict:
+             candle_minutes: int, ref_width: float = 0.02,
+             concentration: bool = True) -> dict:
     """
     Percorre os candles abrindo trades NÃO sobrepostos (cooldown = horizon)
     quando p >= threshold. Devolve o resumo agregado do backtest.
+
+    Modelo de fee consciente de concentração (padrão): o APR efetivo escala
+    inversamente com a largura da banda — banda mais estreita = posição mais
+    concentrada = mais fee por dólar. `fee_apr` é o APR de REFERÊNCIA, medido a
+    uma banda de largura `ref_width`; o multiplicador de concentração de cada
+    trade é `ref_width / largura_da_banda_prevista`. Com `concentration=False`
+    volta ao modelo antigo (APR fixo, cego à largura).
     """
     n = len(p)
     candles_per_year = 365.0 * 24.0 * 60.0 / candle_minutes
-    fee_per_in_range_candle = capital * fee_apr / candles_per_year
+    base_fee_per_candle = capital * fee_apr / candles_per_year
 
     trades = []
     t = 0
@@ -111,13 +119,15 @@ def simulate(fut_low: np.ndarray, fut_high: np.ndarray, tir: np.ndarray,
         if p[t] >= threshold:
             in_band = bool((fut_low[t] >= lo_pred[t]) and (fut_high[t] <= hi_pred[t]))
             frac = float(tir[t]) if not np.isnan(tir[t]) else 0.0
-            fees = fee_per_in_range_candle * horizon * frac
+            width = float(hi_pred[t] - lo_pred[t])
+            mult = (ref_width / width) if (concentration and width > 1e-9) else 1.0
+            fees = base_fee_per_candle * mult * horizon * frac
             cost = gas * (1.0 + (0.0 if in_band else 1.0))   # abrir (+ rebalance se estourou)
             trades.append({
                 "in_band": in_band,
                 "fixed_in_range": int(label_fixed[t]) if not np.isnan(label_fixed[t]) else 0,
                 "time_in_range": frac,
-                "band_width": float(hi_pred[t] - lo_pred[t]),
+                "band_width": width, "conc_mult": mult,
                 "fees": fees, "cost": cost, "pnl": fees - cost,
             })
             t += horizon                     # cooldown: sem sobreposição
@@ -136,6 +146,7 @@ def simulate(fut_low: np.ndarray, fut_high: np.ndarray, tir: np.ndarray,
         "win_rate_fixo1pct": float(arr("fixed_in_range").mean()),
         "avg_time_in_range": float(arr("time_in_range").mean()),
         "avg_band_width_pct": float(arr("band_width").mean() * 100),
+        "avg_conc_mult": float(arr("conc_mult").mean()),
         "total_pnl": float(pnl.sum()),
         "pnl_por_trade": float(pnl.mean()),
         "pnl_positivos_frac": float((pnl > 0).mean()),
@@ -162,13 +173,18 @@ def main() -> int:
     ap.add_argument("--high-q", type=float, default=0.90)
     ap.add_argument("--capital", type=float, default=1000.0, help="capital por posição (USD)")
     ap.add_argument("--fee-apr-in-range", type=float, default=0.50,
-                    help="APR de fee assumido enquanto em range (premissa a calibrar)")
+                    help="APR de fee de REFERÊNCIA (medido a --ref-width). Calibre com dados reais")
+    ap.add_argument("--ref-width", type=float, default=0.02,
+                    help="largura de banda (fração) em que --fee-apr-in-range foi medido (0.02 = 2%%)")
+    ap.add_argument("--flat-fee", action="store_true",
+                    help="desliga a concentração: APR fixo, cego à largura da banda (modelo antigo)")
     ap.add_argument("--gas", type=float, default=0.5, help="custo por abrir/rebalancear (USD)")
     ap.add_argument("--candle-minutes", type=int, default=None,
                     help="override da duração do candle; padrão vem do timeframe")
     ap.add_argument("--full", action="store_true",
                     help="usa o dataset INTEIRO (inclui treino — otimista). Padrão: só holdout")
     args = ap.parse_args()
+    concentration = not args.flat_fee
 
     base = os.path.dirname(__file__)
     path = args.dataset or os.path.join(base, "datasets", f"training_{args.timeframe}.parquet")
@@ -199,19 +215,23 @@ def main() -> int:
 
     thresholds = [float(x) for x in args.thresholds.split(",") if x.strip()]
 
+    print(f"Modelo de fee: {'concentração (APR ~ 1/largura)' if concentration else 'plano (APR fixo)'}"
+          f" | ref_width={args.ref_width:.3f} apr_ref={args.fee_apr_in_range} gas={args.gas}")
+
     # baseline: entra em TODO candle elegível (threshold = -inf efetivo => 0.0)
     rows = [simulate(fut_low, fut_high, tir, label_fixed, np.ones_like(p),  # força entrar sempre
                      lo_pred, hi_pred, 0.5, args.horizon, args.capital,
-                     args.fee_apr_in_range, args.gas, candle_min)]
+                     args.fee_apr_in_range, args.gas, candle_min,
+                     args.ref_width, concentration)]
     rows[0]["threshold"] = "baseline(todos)"
     for th in thresholds:
         rows.append(simulate(fut_low, fut_high, tir, label_fixed, p, lo_pred, hi_pred,
                              th, args.horizon, args.capital, args.fee_apr_in_range,
-                             args.gas, candle_min))
+                             args.gas, candle_min, args.ref_width, concentration))
 
     # ---- tabela ----
     hdr = ["limiar", "trades", "win_banda", "win_fixo1%", "t_em_range",
-           "banda_%", "pnl_total", "pnl/trade", "%trades+"]
+           "banda_%", "conc_x", "pnl_total", "pnl/trade", "%trades+"]
     print("\n" + "  ".join(f"{h:>13}" for h in hdr))
     for r in rows:
         if r.get("n_trades", 0) == 0:
@@ -221,8 +241,8 @@ def main() -> int:
             str(r["threshold"]), r["n_trades"],
             f"{r['win_rate_banda']:.3f}", f"{r['win_rate_fixo1pct']:.3f}",
             f"{r['avg_time_in_range']:.3f}", f"{r['avg_band_width_pct']:.3f}",
-            f"{r['total_pnl']:.2f}", f"{r['pnl_por_trade']:.3f}",
-            f"{r['pnl_positivos_frac']:.3f}"]))
+            f"{r['avg_conc_mult']:.2f}", f"{r['total_pnl']:.2f}",
+            f"{r['pnl_por_trade']:.3f}", f"{r['pnl_positivos_frac']:.3f}"]))
 
     out = os.path.join(args.models_dir, f"backtest_{tf}.json")
     with open(out, "w") as fh:
