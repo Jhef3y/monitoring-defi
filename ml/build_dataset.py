@@ -234,7 +234,7 @@ def build_labels(df: pd.DataFrame, horizon: int, range_pct: float,
 # --------------------------------------------------------------------------- #
 FEATURE_COLS = [
     "ret_1", "logret_1", "ret_5", "ret_15", "rv_20",
-    "atr_14", "atr_ratio", "bb_middle", "bb_bandwidth", "dist_to_bb_mid",
+    "atr_14", "atr_ratio", "bb_bandwidth", "dist_to_bb_mid",
     "bb_pct_b", "bb_bandwidth_pctile", "is_squeeze", "trend_slope",
     "vol_z",
     "bb_bandwidth_lag1", "bb_bandwidth_lag3",
