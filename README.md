@@ -152,7 +152,51 @@ Em ambos, a Whirlpool fornece preço (`sqrtPrice` Q64.64), tick e liquidez in-ra
 
 > Nota sobre volume no modo polling: o volume é medido pelo delta de saldo dos cofres entre leituras, então representa a variação líquida no intervalo (um limite inferior do volume bruto quando há compras e vendas no mesmo intervalo). Preço e TVL são exatos; para volume bruto swap-a-swap, use o modo WebSocket ou uma fonte de trades.
 
-## 5. Testes
+## 5. Geração do dataset de treino (Fase 2)
+
+O script `ml/build_dataset.py` é um job **batch offline** (não faz parte do caminho
+em tempo real): lê o OHLCV gravado em `pool_metrics`, recalcula features *causais*
+e gera labels *forward-looking* (janela de range, bandas high/low, `label_in_range`),
+exportando um Parquet por timeframe pronto para treino (LightGBM/XGBoost).
+
+### Rodar local com túnel SSH para o banco da VM (GCP)
+
+A aplicação e o TimescaleDB rodam numa VM do Compute Engine. Para extrair o dataset
+no seu notebook, abra um túnel SSH mapeando a porta do Postgres da VM (`5432`) para
+uma porta local (`5433`):
+
+```bash
+# Terminal 1 — mantém o túnel aberto (-N não abre shell; Ctrl-C encerra):
+gcloud compute ssh NOME_DA_INSTANCIA --zone SUA_ZONA -- -N -L 5433:localhost:5432
+```
+
+```bash
+# Terminal 2 — com o túnel ativo, o banco da VM aparece em localhost:5433:
+python3 -m venv .venv && source .venv/bin/activate
+pip install pandas numpy pyarrow psycopg2-binary
+
+export DB_DSN='postgresql://defi:defi@localhost:5433/defi_timeseries'
+
+# 5m, horizonte de 24 candles (2h), banda LP de 1%:
+python3 ml/build_dataset.py --timeframe 5m --horizon 24 --range-pct 1.0
+
+# todas as pools/timeframes, com CSV de debug:
+python3 ml/build_dataset.py --timeframe 1m --timeframe 5m --timeframe 1h --csv
+```
+
+> Saída em `ml/datasets/training_<timeframe>.parquet`. Os parâmetros `--horizon`
+> (tempo de permanência da posição, em candles) e `--range-pct` (largura do range LP)
+> definem o alvo — vale testar valores diferentes.
+
+**Alternativa — rodar direto na VM:** como o Timescale escuta em `localhost:5432`
+na própria VM, dá para dispensar o túnel: `gcloud compute ssh NOME_DA_INSTANCIA`,
+instalar as dependências lá e usar `DB_DSN=postgresql://defi:defi@localhost:5432/defi_timeseries`.
+
+> Não é um serviço contínuo: roda **uma vez** para criar o dataset inicial e depois
+> **periodicamente** (semanal/mensal), antes de cada re-treino, para incorporar os
+> dados novos coletados ao vivo.
+
+## 6. Testes
 
 Testes unitários em `src/test/java` (JUnit 5 + AssertJ), sem dependência de banco:
 
