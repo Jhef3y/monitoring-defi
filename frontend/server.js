@@ -30,7 +30,8 @@ async function safeQuery(res, sql, params = []) {
     return rows;
   } catch (err) {
     if (err.code === '42P01') {        // undefined_table
-      res.set('x-data-warning', 'tabelas ainda não criadas — rode o app Java primeiro');
+      // Header HTTP so aceita ASCII (Latin-1) — sem acentos/travessao aqui.
+      res.set('x-data-warning', 'tables not created yet - run the pipeline first');
       return [];
     }
     console.error('Erro de query:', err.message);
