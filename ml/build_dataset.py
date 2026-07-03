@@ -299,7 +299,7 @@ def main() -> int:
     os.makedirs(args.out_dir, exist_ok=True)
 
     print(f"Conectando ao banco... horizon={args.horizon} range={args.range_pct}% "
-          f"({range_frac:+.4f})")
+          f"({range_frac:+.4f})", flush=True)
     conn = psycopg2.connect(args.dsn)
 
     grand = 0
@@ -307,17 +307,20 @@ def main() -> int:
         for tf in timeframes:
             frames = []
             for symbol, addr in pools.items():
+                print(f"   [{symbol} | {tf}] consultando o banco...", flush=True)
                 raw = pd.read_sql(SELECT_SQL, conn, params={"addr": addr, "tf": tf})
                 if raw.empty:
-                    print(f"   [{symbol} | {tf}] sem dados — pulando")
+                    print(f"   [{symbol} | {tf}] sem dados — pulando", flush=True)
                     continue
+                print(f"   [{symbol} | {tf}] {len(raw)} candles lidos, "
+                      f"gerando features/labels...", flush=True)
                 raw["bucket_time"] = pd.to_datetime(raw["bucket_time"], utc=True)
                 part = process_series(raw, symbol, addr, tf, args.horizon,
                                       range_frac, args.in_range_min_frac)
                 pos = int(part["label_in_range"].sum())
                 print(f"   [{symbol} | {tf}] {len(raw)} candles -> "
                       f"{len(part)} linhas de treino | label_in_range=1: "
-                      f"{pos} ({(pos/max(len(part),1)):.1%})")
+                      f"{pos} ({(pos/max(len(part),1)):.1%})", flush=True)
                 frames.append(part)
 
             if not frames:

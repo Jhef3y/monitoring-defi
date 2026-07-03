@@ -152,18 +152,37 @@ Em ambos, a Whirlpool fornece preço (`sqrtPrice` Q64.64), tick e liquidez in-ra
 
 > Nota sobre volume no modo polling: o volume é medido pelo delta de saldo dos cofres entre leituras, então representa a variação líquida no intervalo (um limite inferior do volume bruto quando há compras e vendas no mesmo intervalo). Preço e TVL são exatos; para volume bruto swap-a-swap, use o modo WebSocket ou uma fonte de trades.
 
-## 5. Geração do dataset de treino (Fase 2)
+## 5. Treino do agente de IA (Fase 2 + 3)
 
-O script `ml/build_dataset.py` é um job **batch offline** (não faz parte do caminho
-em tempo real): lê o OHLCV gravado em `pool_metrics`, recalcula features *causais*
-e gera labels *forward-looking* (janela de range, bandas high/low, `label_in_range`),
-exportando um Parquet por timeframe pronto para treino (LightGBM/XGBoost).
+Os scripts em `ml/` são jobs **batch offline** — não fazem parte do caminho em tempo
+real da aplicação. O fluxo tem duas etapas:
 
-### Rodar local com túnel SSH para o banco da VM (GCP)
+1. **`ml/build_dataset.py` (Fase 2)** — lê o OHLCV de `pool_metrics`, recalcula
+   features *causais* (só passado) e gera labels *forward-looking* (janela de range,
+   bandas high/low, `label_in_range`). Exporta um Parquet por timeframe.
+2. **`ml/train.py` (Fase 3)** — treina, com validação temporal *walk-forward* +
+   *embargo*, um classificador (`P(entrar)`) e dois regressores quantílicos
+   (banda `low` p10 / `high` p90). Salva os modelos e um relatório de métricas.
 
-A aplicação e o TimescaleDB rodam numa VM do Compute Engine. Para extrair o dataset
-no seu notebook, abra um túnel SSH mapeando a porta do Postgres da VM (`5432`) para
-uma porta local (`5433`):
+> Não é serviço contínuo: roda **uma vez** para o dataset/modelo inicial e depois
+> **periodicamente** (semanal/mensal), antes de cada re-treino, para incorporar os
+> dados novos coletados ao vivo. A geração de sinal ao vivo é uma fase posterior.
+
+### 5.1. Conectar na máquina (GCP Compute Engine)
+
+A aplicação e o TimescaleDB rodam numa VM. Há duas formas de alcançar o banco:
+
+**Opção A — rodar direto na VM (mais simples).** O Timescale escuta em
+`localhost:5432` dentro da VM, então nem precisa de túnel:
+
+```bash
+gcloud compute ssh NOME_DA_INSTANCIA --zone SUA_ZONA
+# já dentro da VM:
+export DB_DSN='postgresql://defi:defi@localhost:5432/defi_timeseries'
+```
+
+**Opção B — rodar no seu notebook via túnel SSH.** Útil se preferir treinar
+localmente. Mapeie a porta `5432` da VM para uma porta local (`5433`):
 
 ```bash
 # Terminal 1 — mantém o túnel aberto (-N não abre shell; Ctrl-C encerra):
@@ -172,29 +191,98 @@ gcloud compute ssh NOME_DA_INSTANCIA --zone SUA_ZONA -- -N -L 5433:localhost:543
 
 ```bash
 # Terminal 2 — com o túnel ativo, o banco da VM aparece em localhost:5433:
-python3 -m venv .venv && source .venv/bin/activate
-pip install pandas numpy pyarrow psycopg2-binary
-
 export DB_DSN='postgresql://defi:defi@localhost:5433/defi_timeseries'
+```
 
+> Ajuste usuário/senha do DSN conforme o seu `.env` (`DB_USER`/`DB_PASSWORD`).
+> Como o dataset é pequeno, qualquer uma serve — extrair na VM e baixar só o
+> Parquet para treinar no notebook também é uma combinação boa.
+
+### 5.2. Preparar o ambiente
+
+Traga o código para onde vai rodar (`git pull` na VM, ou já no notebook) e instale
+as dependências num ambiente virtual:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install pandas numpy pyarrow psycopg2-binary lightgbm
+```
+
+### 5.3. Conferir os dados antes de gerar o dataset
+
+Verifique que o backfill (6 meses) e os dados ao vivo estão contínuos, sem buraco:
+
+```sql
+-- psql "$DB_DSN"
+SELECT timeframe, count(*) AS linhas,
+       min(bucket_time) AS inicio, max(bucket_time) AS fim
+FROM pool_metrics
+GROUP BY timeframe
+ORDER BY timeframe;
+```
+
+### 5.4. Fase 2 — gerar o dataset (`build_dataset.py`)
+
+```bash
 # 5m, horizonte de 24 candles (2h), banda LP de 1%:
 python3 ml/build_dataset.py --timeframe 5m --horizon 24 --range-pct 1.0
 
-# todas as pools/timeframes, com CSV de debug:
-python3 ml/build_dataset.py --timeframe 1m --timeframe 5m --timeframe 1h --csv
+# vários timeframes de uma vez, com CSV de debug:
+python3 ml/build_dataset.py --timeframe 1m --timeframe 5m --csv
 ```
 
-> Saída em `ml/datasets/training_<timeframe>.parquet`. Os parâmetros `--horizon`
-> (tempo de permanência da posição, em candles) e `--range-pct` (largura do range LP)
-> definem o alvo — vale testar valores diferentes.
+Saída: `ml/datasets/training_<timeframe>.parquet`.
 
-**Alternativa — rodar direto na VM:** como o Timescale escuta em `localhost:5432`
-na própria VM, dá para dispensar o túnel: `gcloud compute ssh NOME_DA_INSTANCIA`,
-instalar as dependências lá e usar `DB_DSN=postgresql://defi:defi@localhost:5432/defi_timeseries`.
+Parâmetros que definem o alvo (vale testar valores):
 
-> Não é um serviço contínuo: roda **uma vez** para criar o dataset inicial e depois
-> **periodicamente** (semanal/mensal), antes de cada re-treino, para incorporar os
-> dados novos coletados ao vivo.
+| Flag | O que é | Padrão |
+|---|---|---|
+| `--horizon` | nº de candles à frente = tempo de permanência da posição | 24 |
+| `--range-pct` | largura da banda LP em % (1.0 ⇒ ±0,5%) | 1.0 |
+| `--in-range-min-frac` | tolerância do rótulo "quase sempre em range" | 0.95 |
+| `--pool` | restringe a uma pool (repetível) | todas |
+
+**O que observar na saída:** a linha `label_in_range=1 (%)` por pool. Se vier
+~0%, a banda está estreita demais para o horizonte — afrouxe (`--range-pct 1.5`)
+ou encurte o `--horizon`. O ideal é ter algo entre ~5% e ~15% de positivos.
+Foque nos timeframes granulares (`1m`/`5m`); em `1h` há poucas linhas (~4.300
+para 6 meses), insuficiente para treino robusto.
+
+### 5.5. Fase 3 — treinar (`train.py`)
+
+```bash
+# embargo DEVE ser >= o --horizon usado no build_dataset (evita vazamento pelos labels)
+python3 ml/train.py --timeframe 5m --embargo 24
+```
+
+Saída em `ml/models/`: `clf_<tf>.txt` (classificador), `q10_<tf>.txt` e
+`q90_<tf>.txt` (bandas low/high) e `metrics_<tf>.json` (relatório).
+
+Flags úteis:
+
+| Flag | O que é | Padrão |
+|---|---|---|
+| `--embargo` | linhas purgadas entre treino e validação (≥ `--horizon`) | 24 |
+| `--n-splits` | folds da validação walk-forward | 5 |
+| `--test-frac` | fração final (por tempo) reservada como holdout | 0.15 |
+| `--label` | alvo do classificador (`label_in_range` / `label_mostly_in_range`) | `label_in_range` |
+| `--low-q` / `--high-q` | quantis das bandas inferior/superior | 0.10 / 0.90 |
+
+**O que observar em `metrics_<tf>.json`:**
+
+- `holdout.clf_auc` — qualidade do "entrar ou não"; **> 0,5** já indica sinal real.
+- `holdout.interval_coverage` — fração do movimento real que coube na banda
+  prevista; para p10–p90 o alvo natural é **≈ 0,80**. Muito abaixo = banda
+  estreita demais; muito acima = banda larga demais (posição pouco eficiente).
+- nº de positivos do label — se for baixíssimo, volte à Fase 2 e ajuste
+  `--range-pct`/`--horizon`.
+- `feature_importance_gain` — quais sinais o modelo mais usa (sanidade).
+
+### 5.6. Ciclo de re-treino
+
+Conforme a aplicação acumula mais dados ao vivo, repita 5.4 → 5.5 periodicamente
+(semanal/mensal) para reaproveitar o histórico crescente. Cada rodada regenera o
+Parquet e retreina os modelos do zero — não há estado a manter entre execuções.
 
 ## 6. Testes
 
