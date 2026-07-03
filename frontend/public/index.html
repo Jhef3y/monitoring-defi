@@ -38,9 +38,15 @@
     <!-- Resumo do estado atual -->
     <section class="cards" id="summaryCards"></section>
 
-    <!-- OHLCV + Bollinger -->
+    <!-- Sinal da IA (pool_signals) -->
     <section class="panel">
-      <h2>Preço · Bandas de Bollinger · PoC <span class="hint">squeeze destacado em ●</span></h2>
+      <h2>Sinal da IA <span class="hint">entrada de range · banda sugerida (quantis p10/p90)</span></h2>
+      <section class="cards" id="signalCards"></section>
+    </section>
+
+    <!-- OHLCV + Bollinger + banda da IA -->
+    <section class="panel">
+      <h2>Preço · Bandas de Bollinger · PoC <span class="hint">squeeze em ● · banda da IA sombreada · entrada em ▲</span></h2>
       <div class="chart-wrap"><canvas id="priceChart"></canvas></div>
     </section>
 
@@ -75,6 +81,20 @@
             <th>Pool</th><th>TF</th><th>Estado</th><th>Squeeze</th>
             <th>Bandwidth</th><th>ATR</th><th>Vol/TVL</th>
             <th>PoC</th><th>Macro 24h</th><th>Atualizado</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <!-- Sinais recentes da IA -->
+    <section class="panel">
+      <h2>Sinais Recentes da IA <span class="hint">pool_signals · mais recentes primeiro</span></h2>
+      <table id="signalsTable">
+        <thead>
+          <tr>
+            <th>Momento</th><th>Ação</th><th>Confiança</th>
+            <th>Preço</th><th>Banda inferior</th><th>Banda superior</th><th>Largura</th>
           </tr>
         </thead>
         <tbody></tbody>

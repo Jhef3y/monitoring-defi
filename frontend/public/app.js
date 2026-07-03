@@ -58,18 +58,21 @@ async function loadAll() {
 
   $('#status').textContent = 'carregando…';
   try {
-    const [metrics, scanner, fundamentals] = await Promise.all([
+    const [metrics, signals, scanner, fundamentals] = await Promise.all([
       fetch(`/api/metrics?pool=${encodeURIComponent(pool)}&timeframe=${tf}&limit=${limit}`).then((r) => r.json()),
+      fetch(`/api/signals?pool=${encodeURIComponent(pool)}&timeframe=${tf}&limit=${limit}`).then((r) => r.json()),
       fetch(`/api/scanner`).then((r) => r.json()),
       fetch(`/api/fundamentals`).then((r) => r.json()),
     ]);
     renderSummary(metrics);
-    renderPriceChart(metrics);
+    renderSignalCards(signals);
+    renderPriceChart(metrics, signals);
     renderAtrChart(metrics);
     renderBandwidthChart(metrics);
     renderVolumeChart(metrics);
     renderRatioChart(metrics);
     renderScanner(scanner);
+    renderSignalsTable(signals);
     renderFundamentals(fundamentals);
     $('#status').textContent = metrics.length
       ? `${metrics.length} candles · atualizado ${new Date().toLocaleTimeString('pt-BR')}`
@@ -97,12 +100,20 @@ function renderSummary(rows) {
   el.innerHTML = cards.map(([k, v]) => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
 }
 
-function renderPriceChart(rows) {
+function renderPriceChart(rows, signals = []) {
   const labels = rows.map((r) => fmtTime(r.bucket_time));
   const line = (label, key, color, opts = {}) => ({
     label, data: rows.map((r) => r[key]), borderColor: color, backgroundColor: color,
     borderWidth: 1.5, pointRadius: 0, tension: 0.1, ...opts,
   });
+
+  // Alinha os sinais aos candles por timestamp (só existem onde o predict rodou)
+  const sigByTime = new Map(signals.map((s) => [new Date(s.signal_time).getTime(), s]));
+  const at = (r) => sigByTime.get(new Date(r.bucket_time).getTime());
+  const bandHigh = rows.map((r) => { const s = at(r); return s ? s.range_high : null; });
+  const bandLow = rows.map((r) => { const s = at(r); return s ? s.range_low : null; });
+  const entries = rows.map((r) => { const s = at(r); return s && s.enter ? r.close : null; });
+
   makeChart('#priceChart', {
     type: 'line',
     data: {
@@ -118,11 +129,76 @@ function renderPriceChart(rows) {
           borderColor: 'transparent', backgroundColor: '#d29922',
           showLine: false, pointRadius: 4, pointHoverRadius: 6,
         },
+        // Banda sugerida pela IA (área sombreada entre high e low)
+        {
+          label: 'IA · banda ▲', data: bandHigh, borderColor: 'rgba(63,185,80,0.55)',
+          borderWidth: 1, pointRadius: 0, borderDash: [3, 3], spanGaps: false, tension: 0,
+        },
+        {
+          label: 'IA · banda ▼', data: bandLow, borderColor: 'rgba(63,185,80,0.55)',
+          backgroundColor: 'rgba(63,185,80,0.10)', borderWidth: 1, pointRadius: 0,
+          borderDash: [3, 3], fill: '-1', spanGaps: false, tension: 0,
+        },
+        {
+          label: 'IA · entrada', data: entries, borderColor: '#3fb950',
+          backgroundColor: '#3fb950', showLine: false, pointStyle: 'triangle',
+          pointRadius: 6, pointHoverRadius: 8,
+        },
       ],
     },
     options: { responsive: true, maintainAspectRatio: false, interaction: { intersect: false, mode: 'index' },
       plugins: { legend }, scales: baseScales() },
   });
+}
+
+function renderSignalCards(signals) {
+  const el = $('#signalCards');
+  if (!signals || !signals.length) {
+    el.innerHTML = '<div class="card"><div class="k">Sinal</div><div class="v" style="font-size:14px;color:var(--muted)">sem sinais ainda — rode <code>ml/predict.py</code></div></div>';
+    return;
+  }
+  const s = signals[signals.length - 1];
+  const width = s.range_high_pct != null && s.range_low_pct != null
+    ? ((s.range_high_pct - s.range_low_pct) * 100).toFixed(2) + '%' : '—';
+  const action = s.enter
+    ? '<span class="badge alta">● ENTRAR</span>'
+    : '<span class="badge indef">○ aguardar</span>';
+  const cards = [
+    ['Ação', action],
+    ['Confiança', s.confidence == null ? '—' : (Number(s.confidence) * 100).toFixed(1) + '%'],
+    ['Preço no sinal', num(s.close)],
+    ['Banda inferior', num(s.range_low)],
+    ['Banda superior', num(s.range_high)],
+    ['Largura da banda', width],
+    ['Atualizado', fmtTime(s.signal_time)],
+  ];
+  el.innerHTML = cards.map(([k, v]) => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+}
+
+function renderSignalsTable(signals) {
+  const tb = $('#signalsTable tbody');
+  if (!signals || !signals.length) {
+    tb.innerHTML = '<tr><td colspan="7">sem sinais ainda — rode ml/predict.py</td></tr>';
+    return;
+  }
+  const recent = signals.slice().reverse().slice(0, 30);   // mais recentes primeiro
+  tb.innerHTML = recent.map((s) => {
+    const width = s.range_high_pct != null && s.range_low_pct != null
+      ? ((s.range_high_pct - s.range_low_pct) * 100).toFixed(2) + '%' : '—';
+    const action = s.enter
+      ? '<span class="badge alta">ENTRAR</span>'
+      : '<span class="badge indef">aguardar</span>';
+    return `
+      <tr>
+        <td>${fmtTime(s.signal_time)}</td>
+        <td>${action}</td>
+        <td>${s.confidence == null ? '—' : (Number(s.confidence) * 100).toFixed(1) + '%'}</td>
+        <td>${num(s.close)}</td>
+        <td>${num(s.range_low)}</td>
+        <td>${num(s.range_high)}</td>
+        <td>${width}</td>
+      </tr>`;
+  }).join('');
 }
 
 function renderAtrChart(rows) {

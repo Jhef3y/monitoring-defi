@@ -122,6 +122,23 @@ app.get('/api/fundamentals', async (_req, res) => {
   if (rows) res.json(rows);
 });
 
+// Sinais da IA (pool_signals) — série alinhada ao gráfico + último sinal
+app.get('/api/signals', async (req, res) => {
+  const poolAddr = req.query.pool || '';
+  const timeframe = req.query.timeframe || '5m';
+  const limit = Math.min(Number(req.query.limit || 500), 5000);
+  if (!poolAddr) return res.status(400).json({ error: 'parâmetro "pool" é obrigatório' });
+
+  const rows = await safeQuery(res,
+    `SELECT signal_time, close, enter, confidence, threshold,
+            range_low, range_high, range_low_pct, range_high_pct, model_tf
+       FROM pool_signals
+      WHERE pool_address = $1 AND timeframe = $2
+      ORDER BY signal_time DESC
+      LIMIT $3`, [poolAddr, timeframe, limit]);
+  if (rows) res.json(rows.reverse());   // ordem cronológica para o overlay
+});
+
 app.listen(PORT, () => {
   console.log(`Dashboard DeFi em http://localhost:${PORT}`);
 });
