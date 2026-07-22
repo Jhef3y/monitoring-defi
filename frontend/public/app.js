@@ -66,6 +66,7 @@ async function loadAll() {
     ]);
     renderSummary(metrics);
     renderSignalCards(signals);
+    loadAgent();                        // painel do agente (config/posições/performance)
     renderPriceChart(metrics, signals);
     renderAtrChart(metrics);
     renderBandwidthChart(metrics);
@@ -278,6 +279,136 @@ function renderFundamentals(rows) {
       <td>${num(r.volume_tvl_ratio, 4)}</td>
     </tr>`).join('');
 }
+
+// ---------- agente de execução ----------
+let cfgLoadedOnce = false;
+
+async function loadAgent() {
+  try {
+    const [cfg, positions, perf] = await Promise.all([
+      fetch('/api/agent/config').then((r) => r.json()),
+      fetch('/api/agent/positions?limit=50').then((r) => r.json()),
+      fetch('/api/agent/performance').then((r) => r.json()),
+    ]);
+    renderAgentConfig(cfg);
+    renderAgentPerf(perf, cfg);
+    renderPositions(positions);
+  } catch (e) {
+    $('#agentCfgStatus').textContent = 'executor indisponível: ' + e.message;
+  }
+}
+
+function renderAgentConfig(cfg) {
+  if (!cfg) {
+    $('#agentCfgStatus').textContent = 'aguardando o executor criar as tabelas…';
+    return;
+  }
+  // Não sobrescreve o form enquanto o usuário edita — só preenche na 1ª carga
+  if (!cfgLoadedOnce) {
+    $('#cfgEnabled').checked = !!cfg.auto_open_enabled;
+    $('#cfgMode').value = cfg.mode || 'paper';
+    $('#cfgCapital').value = cfg.capital_per_pool_usd;
+    $('#cfgMaxPools').value = cfg.max_open_pools;
+    $('#cfgMinConf').value = cfg.min_confidence;
+    $('#cfgSlippage').value = cfg.slippage_bps;
+    cfgLoadedOnce = true;
+  }
+  const w = cfg.wallet_pubkey
+    ? `${cfg.wallet_pubkey.slice(0, 6)}…${cfg.wallet_pubkey.slice(-6)}<br>` +
+      `<span style="color:var(--muted)">${cfg.wallet_sol == null ? '' : Number(cfg.wallet_sol).toFixed(4) + ' SOL'}</span>`
+    : '<span style="color:var(--muted)">não configurada (modo paper não precisa)</span>';
+  $('#walletInfo').innerHTML = w;
+}
+
+function renderAgentPerf(perf, cfg) {
+  const el = $('#agentPerfCards');
+  if (!perf || !perf.length) {
+    el.innerHTML = '<div class="card"><div class="k">Performance</div><div class="v" style="font-size:13px;color:var(--muted)">sem posições ainda</div></div>';
+    return;
+  }
+  el.innerHTML = perf.map((m) => {
+    const pnl = m.total_pnl == null ? 0 : Number(m.total_pnl);
+    const cls = pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
+    return `
+      <div class="card"><div class="k">${m.mode} · abertas</div><div class="v">${m.n_open}</div></div>
+      <div class="card"><div class="k">${m.mode} · fechadas</div><div class="v">${m.n_closed}</div></div>
+      <div class="card"><div class="k">${m.mode} · PnL total</div><div class="v ${cls}">$${pnl.toFixed(4)}</div></div>
+      <div class="card"><div class="k">${m.mode} · win rate</div><div class="v">${m.win_rate == null ? '—' : (Number(m.win_rate) * 100).toFixed(0) + '%'}</div></div>
+      <div class="card"><div class="k">${m.mode} · rend. médio</div><div class="v">${m.avg_yield == null ? '—' : (Number(m.avg_yield) * 100).toFixed(3) + '%'}</div></div>`;
+  }).join('');
+}
+
+function renderPositions(rows) {
+  const tb = $('#positionsTable tbody');
+  if (!rows || !rows.length) {
+    tb.innerHTML = '<tr><td colspan="14">nenhuma posição — habilite a abertura automática e aguarde um sinal</td></tr>';
+    return;
+  }
+  const stBadge = (s) => `<span class="badge ${s === 'OPEN' ? 'open' : s === 'CLOSED' ? 'closed' : 'error'}">${s}</span>`;
+  tb.innerHTML = rows.map((p) => {
+    const pnl = p.pnl_usd == null ? null : Number(p.pnl_usd);
+    const pnlHtml = pnl == null ? '—' : `<span class="${pnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">$${pnl.toFixed(4)}</span>`;
+    const yieldHtml = p.yield_pct == null ? '—' : ((Number(p.yield_pct) * 100).toFixed(3) + '%');
+    const closeBtn = p.status === 'OPEN'
+      ? `<button class="btn-close-pos" data-id="${p.id}">${p.close_requested ? 'fechando…' : 'Fechar'}</button>`
+      : '';
+    return `
+      <tr>
+        <td>${p.id}</td>
+        <td>${p.symbol || p.pool_address.slice(0, 6) + '…'}</td>
+        <td>${p.mode}</td>
+        <td>${stBadge(p.status)}</td>
+        <td>${fmtTime(p.opened_at)}</td>
+        <td>${num(p.entry_price)}</td>
+        <td>${num(p.range_low)} – ${num(p.range_high)}</td>
+        <td>$${num(p.capital_usd, 2)}</td>
+        <td>${p.exit_price == null ? '—' : num(p.exit_price)}</td>
+        <td>${p.exit_value_usd == null ? '—' : '$' + num(p.exit_value_usd, 4)}</td>
+        <td>${pnlHtml}</td>
+        <td>${yieldHtml}</td>
+        <td>${p.close_reason || (p.error ? '⚠ ' + p.error.slice(0, 40) : '—')}</td>
+        <td>${closeBtn}</td>
+      </tr>`;
+  }).join('');
+
+  tb.querySelectorAll('.btn-close-pos').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!confirm(`Solicitar fechamento da posição #${btn.dataset.id}?`)) return;
+      btn.disabled = true;
+      await fetch(`/api/agent/positions/${btn.dataset.id}/close`, { method: 'POST' });
+      loadAgent();
+    });
+  });
+}
+
+$('#agentConfigForm').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const mode = $('#cfgMode').value;
+  const enabled = $('#cfgEnabled').checked;
+  if (mode === 'live' && enabled &&
+      !confirm('Modo LIVE com abertura automática: o agente vai enviar transações REAIS na Orca. Confirmar?')) {
+    return;
+  }
+  const body = {
+    auto_open_enabled: enabled,
+    mode,
+    capital_per_pool_usd: Number($('#cfgCapital').value),
+    max_open_pools: Number($('#cfgMaxPools').value),
+    min_confidence: Number($('#cfgMinConf').value),
+    slippage_bps: Number($('#cfgSlippage').value),
+  };
+  const st = $('#agentCfgStatus');
+  st.textContent = 'salvando…';
+  try {
+    const r = await fetch('/api/agent/config', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    st.textContent = r.ok ? 'configuração salva ✓' : 'erro ao salvar';
+  } catch (e) {
+    st.textContent = 'erro: ' + e.message;
+  }
+});
 
 // ---------- init ----------
 $('#refreshBtn').addEventListener('click', loadAll);

@@ -1,0 +1,20 @@
+{
+  "name": "defi-executor",
+  "version": "1.0.0",
+  "description": "Executor do agente: abre/fecha posições de range LP na Orca (Whirlpools) a partir dos sinais da IA (pool_signals).",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "pg": "^8.13.1",
+    "@orca-so/whirlpools-sdk": "^0.13.15",
+    "@orca-so/common-sdk": "^0.6.9",
+    "@coral-xyz/anchor": "^0.29.0",
+    "@solana/web3.js": "^1.95.4",
+    "@solana/spl-token": "^0.4.9",
+    "decimal.js": "^10.4.3",
+    "bn.js": "^5.2.1"
+  }
+}

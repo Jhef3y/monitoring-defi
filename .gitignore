@@ -3,3 +3,11 @@
 /frontend/package-lock.json
 /.env
 /backfill/backfill_geckoterminal.py
+# NUNCA commitar a carteira (chave privada) nem artefatos de ML pesados
+/wallet/
+/executor/node_modules/
+/executor/package-lock.json
+/ml/datasets/
+/ml/models/
+/.venv/
+/DEPLOY_AGENTE.md

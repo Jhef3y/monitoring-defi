@@ -176,7 +176,7 @@ A aplicação e o TimescaleDB rodam numa VM. Há duas formas de alcançar o banc
 `localhost:5432` dentro da VM, então nem precisa de túnel:
 
 ```bash
-gcloud compute ssh NOME_DA_INSTANCIA --zone SUA_ZONA
+gcloud compute ssh monitoring-defi --zone us-central1-a
 # já dentro da VM:
 export DB_DSN='postgresql://defi:defi@localhost:5432/defi_timeseries'
 ```
@@ -284,7 +284,87 @@ Conforme a aplicação acumula mais dados ao vivo, repita 5.4 → 5.5 periodicam
 (semanal/mensal) para reaproveitar o histórico crescente. Cada rodada regenera o
 Parquet e retreina os modelos do zero — não há estado a manter entre execuções.
 
-## 6. Testes
+## 6. Agente de execução (Orca Whirlpools)
+
+O serviço `executor/` (Node, container `defi-executor`) fecha o ciclo: consome os
+sinais de `pool_signals` e **abre/fecha posições de range LP na Orca**, gravando
+cada operação em `agent_positions` para o relatório de performance no dashboard.
+
+### Como decide
+
+- **Abertura:** sinal `enter=true` fresco (últimos 3 candles) com confiança ≥
+  mínima, respeitando `max_open_pools` e 1 posição por pool. Banda = [p10, p90]
+  do sinal.
+- **Fechamento:** rompimento da banda (com preço fresco) OU fim do horizonte
+  (~2h) — o que vier primeiro. Fechamento manual pelo dashboard tem precedência.
+- **Kill switch:** desabilitar a abertura automática NUNCA abandona posições —
+  o gerenciamento/fechamento continua rodando.
+
+### Modos
+
+- **paper (padrão):** simula com matemática CLMM exata (IL incluída; fees
+  estimadas pelo modelo do backtest). Zero risco — valida o ciclo completo.
+- **live:** envia transações reais via SDK da Orca. Exige `RPC_URL` e o keypair.
+
+### Segurança da carteira
+
+A chave privada fica APENAS na VM: `wallet/keypair.json` (formato `id.json` do
+`solana-keygen`), montado read-only no container. Nunca passa pelo navegador nem
+pelo banco; o front exibe só o endereço público e o saldo. O diretório `wallet/`
+está no `.gitignore` — **nunca commitar**. No modo live a carteira precisa ter
+os dois tokens do par (ex.: SOL e USDC).
+
+### Configuração pelo dashboard
+
+Painel "Agente · Execução Automática": liga/desliga a abertura automática, modo
+paper/live, capital por pool, máximo de pools simultâneas, confiança mínima e
+slippage. Tabela de posições (com fechamento manual) e cards de performance
+(PnL total, win rate, rendimento médio) por modo.
+
+### Gerar a carteira do agente (`wallet/keypair.json`)
+
+Use uma carteira **dedicada ao agente** (nunca a principal), com só o capital
+que ele vai operar. Na VM:
+
+```bash
+# 1. Instalar a CLI da Solana (se ainda não tiver)
+sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+
+# 2. Gerar o keypair direto no diretório montado pelo executor
+mkdir -p ~/monitoring-defi/wallet
+solana-keygen new --outfile ~/monitoring-defi/wallet/keypair.json
+# (guarde a seed phrase exibida em local seguro OFFLINE — é o único backup)
+
+# 3. Restringir permissões e conferir o endereço público
+chmod 600 ~/monitoring-defi/wallet/keypair.json
+solana-keygen pubkey ~/monitoring-defi/wallet/keypair.json
+```
+
+Alternativa — usar uma carteira existente (ex.: criada no Phantom): recupere
+pela seed phrase, sem colar chave em lugar nenhum:
+`solana-keygen recover -o ~/monitoring-defi/wallet/keypair.json` (prompt pede a
+seed). Depois `chmod 600` igual.
+
+**Financiar:** transfira para o endereço público: (a) **SOL** para gás + o lado
+base das posições e (b) **USDC** para o lado quote. Para operar $100/pool em
+SOL/USDC, algo como ~0,05 SOL de gás + ~50% do capital em cada token é um bom
+ponto de partida. Confira com `solana balance <PUBKEY>` e no Solscan.
+
+Reinicie o executor (`docker compose restart executor`) — o endereço e o saldo
+aparecem no painel do dashboard em ~1 min.
+
+### Subir
+
+```bash
+docker compose up -d --build executor frontend
+docker compose logs -f executor
+```
+
+Recomendação: rode em **paper por 1–2 semanas** e compare o relatório com o
+backtest antes de habilitar o live — e comece o live com capital pequeno.
+
+## 7. Testes
 
 Testes unitários em `src/test/java` (JUnit 5 + AssertJ), sem dependência de banco:
 

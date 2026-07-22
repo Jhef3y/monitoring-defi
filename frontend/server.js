@@ -21,6 +21,7 @@ const pool = new Pool({
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 
+app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 /** Executa uma query e tolera o caso de a tabela ainda não existir (pipeline novo). */
@@ -138,6 +139,73 @@ app.get('/api/signals', async (req, res) => {
       ORDER BY signal_time DESC
       LIMIT $3`, [poolAddr, timeframe, limit]);
   if (rows) res.json(rows.reverse());   // ordem cronológica para o overlay
+});
+
+// ---------------------------------------------------------------------------
+// Agente de execução (agent_config / agent_positions — tabelas do executor)
+// ---------------------------------------------------------------------------
+
+// Campos editáveis pelo front (whitelist — o resto é do executor)
+const CONFIG_FIELDS = [
+  'auto_open_enabled', 'mode', 'capital_per_pool_usd', 'max_open_pools',
+  'timeframe', 'horizon_candles', 'min_confidence', 'slippage_bps',
+  'fee_apr_ref', 'ref_width',
+];
+
+app.get('/api/agent/config', async (_req, res) => {
+  const rows = await safeQuery(res, 'SELECT * FROM agent_config WHERE id = 1');
+  if (rows) res.json(rows[0] || null);
+});
+
+app.put('/api/agent/config', async (req, res) => {
+  const sets = [];
+  const params = [];
+  for (const f of CONFIG_FIELDS) {
+    if (req.body[f] !== undefined) {
+      params.push(req.body[f]);
+      sets.push(`${f} = $${params.length}`);
+    }
+  }
+  if (!sets.length) return res.status(400).json({ error: 'nenhum campo valido' });
+  if (req.body.mode && !['paper', 'live'].includes(req.body.mode)) {
+    return res.status(400).json({ error: 'mode deve ser paper ou live' });
+  }
+  const rows = await safeQuery(res,
+    `UPDATE agent_config SET ${sets.join(', ')}, updated_at = now()
+      WHERE id = 1 RETURNING *`, params);
+  if (rows) res.json(rows[0] || null);
+});
+
+app.get('/api/agent/positions', async (req, res) => {
+  const limit = Math.min(Number(req.query.limit || 50), 500);
+  const rows = await safeQuery(res,
+    `SELECT * FROM agent_positions
+      ORDER BY (status = 'OPEN') DESC, opened_at DESC
+      LIMIT $1`, [limit]);
+  if (rows) res.json(rows);
+});
+
+// Fechamento manual: o executor honra a flag no próximo ciclo
+app.post('/api/agent/positions/:id/close', async (req, res) => {
+  const rows = await safeQuery(res,
+    `UPDATE agent_positions SET close_requested = TRUE
+      WHERE id = $1 AND status = 'OPEN' RETURNING id`, [req.params.id]);
+  if (rows) res.json({ requested: rows.length > 0 });
+});
+
+app.get('/api/agent/performance', async (_req, res) => {
+  const rows = await safeQuery(res,
+    `SELECT mode,
+            count(*) FILTER (WHERE status = 'OPEN')   AS n_open,
+            count(*) FILTER (WHERE status = 'CLOSED') AS n_closed,
+            sum(pnl_usd)    FILTER (WHERE status = 'CLOSED') AS total_pnl,
+            avg(yield_pct)  FILTER (WHERE status = 'CLOSED') AS avg_yield,
+            sum(fees_est_usd) FILTER (WHERE status = 'CLOSED') AS total_fees_est,
+            (count(*) FILTER (WHERE status = 'CLOSED' AND pnl_usd > 0))::float
+              / NULLIF(count(*) FILTER (WHERE status = 'CLOSED'), 0) AS win_rate
+       FROM agent_positions
+      GROUP BY mode ORDER BY mode`);
+  if (rows) res.json(rows);
 });
 
 app.listen(PORT, () => {

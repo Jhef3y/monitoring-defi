@@ -51,5 +51,26 @@ services:
       - "3000:3000"
     restart: unless-stopped
 
+  executor:
+    build: ./executor
+    container_name: defi-executor
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    environment:
+      DB_HOST: timescaledb
+      DB_PORT: "5432"
+      DB_NAME: defi_timeseries
+      DB_USER: ${DB_USER:-defi}
+      DB_PASSWORD: ${DB_PASSWORD:-defi}
+      # Modo live (opcional): RPC + keypair montado read-only. Em paper podem ficar vazios.
+      RPC_URL: https://solana-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY:-demo}
+      WALLET_KEYPAIR_PATH: /wallet/keypair.json
+      EXEC_INTERVAL_MS: "60000"
+    volumes:
+      # Crie ./wallet/keypair.json (formato id.json do solana-keygen). NÃO commitar!
+      - ./wallet:/wallet:ro
+    restart: unless-stopped
+
 volumes:
   timescale-data:

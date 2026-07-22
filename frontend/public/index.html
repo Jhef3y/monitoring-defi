@@ -44,6 +44,56 @@
       <section class="cards" id="signalCards"></section>
     </section>
 
+    <!-- Agente de execução -->
+    <section class="panel">
+      <h2>Agente · Execução Automática <span class="hint">abre/fecha posições na Orca a partir dos sinais</span></h2>
+      <div class="agent-grid">
+        <form id="agentConfigForm" class="agent-config">
+          <label class="switch-label">
+            <input type="checkbox" id="cfgEnabled" /> Abertura automática habilitada
+          </label>
+          <label>Modo
+            <select id="cfgMode">
+              <option value="paper">paper (simulado)</option>
+              <option value="live">live (transações reais)</option>
+            </select>
+          </label>
+          <label>Capital por pool (USD)
+            <input type="number" id="cfgCapital" min="1" step="1" />
+          </label>
+          <label>Máx. pools abertas
+            <input type="number" id="cfgMaxPools" min="1" max="10" step="1" />
+          </label>
+          <label>Confiança mínima
+            <input type="number" id="cfgMinConf" min="0" max="1" step="0.05" />
+          </label>
+          <label>Slippage (bps)
+            <input type="number" id="cfgSlippage" min="10" max="500" step="10" />
+          </label>
+          <button type="submit">Salvar configuração</button>
+          <span id="agentCfgStatus" class="status"></span>
+        </form>
+        <div class="agent-side">
+          <div class="card">
+            <div class="k">Carteira (servidor)</div>
+            <div class="v" id="walletInfo" style="font-size:13px">—</div>
+          </div>
+          <section class="cards" id="agentPerfCards"></section>
+        </div>
+      </div>
+      <h3 class="sub-h">Posições do agente</h3>
+      <table id="positionsTable">
+        <thead>
+          <tr>
+            <th>#</th><th>Pool</th><th>Modo</th><th>Status</th><th>Abertura</th>
+            <th>Entrada</th><th>Range</th><th>Capital</th><th>Saída</th>
+            <th>Valor saída</th><th>PnL</th><th>Rend.</th><th>Motivo</th><th></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
     <!-- OHLCV + Bollinger + banda da IA -->
     <section class="panel">
       <h2>Preço · Bandas de Bollinger · PoC <span class="hint">squeeze em ● · banda da IA sombreada · entrada em ▲</span></h2>
